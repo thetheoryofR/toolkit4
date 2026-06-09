@@ -1,0 +1,298 @@
+#!/usr/bin/env bash
+#
+# gptk4 — launcher/installer for Apple Game Porting Toolkit 4 via CrossOver
+#
+# Automates the manual steps for getting GPTK4's DirectX 12 -> Metal 4
+# translation layer running on macOS "Golden Gate" (27.0+):
+#
+#   1. Duplicates CrossOver.app into "CrossOver GPTK4.app" so the stock
+#      install stays untouched.
+#   2. Mounts the GPTK4 "Evaluation Environment" disk image and swaps the
+#      GPTK4 libraries into the duplicated app (originals are backed up).
+#   3. Copies the NVIDIA DLSS shim DLLs (nvngx*.dll) into the Steam
+#      bottle's windows/system32, renaming nvngx_on_metal.dll -> nvngx.dll.
+#   4. Adds the Metal 4 / FPS-cap / Metal HUD settings to cxbottle.conf.
+#   5. Launches Steam inside the patched CrossOver.
+#
+# Usage:
+#   ./gptk4 check                 # verify prerequisites
+#   ./gptk4 setup [path-to-dmg]   # do steps 1-4 (finds DMG in ~/Downloads if omitted)
+#   ./gptk4 launch                # start Steam through CrossOver GPTK4
+#   ./gptk4 restore               # undo the library swap (restore backups)
+#
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Configuration — edit these if your setup differs
+# ---------------------------------------------------------------------------
+
+# Name of the CrossOver bottle that Steam was installed into.
+BOTTLE_NAME="${GPTK4_BOTTLE:-Steam}"
+
+# Source CrossOver install and the duplicate we patch.
+CROSSOVER_APP="/Applications/CrossOver.app"
+GPTK4_APP="/Applications/CrossOver GPTK4.app"
+
+# Settings written into cxbottle.conf [EnvironmentVariables].
+ENABLE_METAL4="1"            # D3DM_MTL4 — turn on the Metal 4 backend
+MAX_FPS="${GPTK4_MAX_FPS:-}" # D3DM_MAX_FPS — leave empty for uncapped
+METAL_HUD="1"                # MTL_HUD_ENABLED — shows "D3D12 (Metal 4)" overlay
+
+# Where the GPTK4 libraries live inside the CrossOver app bundle.
+APPLE_GPTK_REL="Contents/SharedSupport/CrossOver/lib64/apple_gptk"
+
+# Steam executable inside the bottle (Windows path).
+STEAM_EXE='C:\Program Files (x86)\Steam\steam.exe'
+
+BOTTLE_DIR="$HOME/Library/Application Support/CrossOver/Bottles/$BOTTLE_NAME"
+SYSTEM32_DIR="$BOTTLE_DIR/drive_c/windows/system32"
+CXBOTTLE_CONF="$BOTTLE_DIR/cxbottle.conf"
+
+# ---------------------------------------------------------------------------
+
+bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
+ok()    { printf '  \033[32m✔\033[0m %s\n' "$*"; }
+warn()  { printf '  \033[33m⚠\033[0m %s\n' "$*"; }
+fail()  { printf '  \033[31m✘\033[0m %s\n' "$*"; }
+die()   { fail "$*"; exit 1; }
+
+require_macos() {
+    [[ "$(uname)" == "Darwin" ]] || die "This script must run on macOS."
+}
+
+# --- check -----------------------------------------------------------------
+
+cmd_check() {
+    require_macos
+    local bad=0
+
+    bold "Checking prerequisites…"
+
+    local osver
+    osver="$(sw_vers -productVersion)"
+    if [[ "${osver%%.*}" -ge 27 ]]; then
+        ok "macOS $osver (Golden Gate or later)"
+    else
+        fail "macOS $osver — GPTK4's Metal 4 layer needs macOS 27.0 (Golden Gate) or later"
+        bad=1
+    fi
+
+    if [[ -d "$CROSSOVER_APP" ]]; then
+        ok "CrossOver found at $CROSSOVER_APP"
+    else
+        fail "CrossOver not found — install it to /Applications first"
+        bad=1
+    fi
+
+    if [[ -d "$BOTTLE_DIR" ]]; then
+        ok "Bottle '$BOTTLE_NAME' exists"
+    else
+        fail "Bottle '$BOTTLE_NAME' not found — install Steam via CrossOver's Install button first"
+        bad=1
+    fi
+
+    if find_dmg >/dev/null 2>&1; then
+        ok "GPTK4 evaluation environment DMG found: $(find_dmg)"
+    else
+        warn "No GPTK4 DMG found in ~/Downloads (you can pass its path to 'setup')"
+    fi
+
+    if [[ -d "$GPTK4_APP" ]]; then
+        ok "CrossOver GPTK4 duplicate already exists"
+    fi
+
+    return $bad
+}
+
+# --- helpers ---------------------------------------------------------------
+
+find_dmg() {
+    # Newest dmg in ~/Downloads that looks like the GPTK / evaluation environment image.
+    local f
+    f="$(ls -t "$HOME"/Downloads/*[Ee]valuation*.dmg \
+              "$HOME"/Downloads/*[Gg]ame*[Pp]orting*.dmg 2>/dev/null | head -n1 || true)"
+    [[ -n "$f" ]] || return 1
+    printf '%s\n' "$f"
+}
+
+mount_dmg() {
+    local dmg="$1"
+    local mount_point
+    mount_point="$(hdiutil attach -nobrowse -readonly "$dmg" \
+        | awk -F'\t' '/\/Volumes\// {print $NF}' | tail -n1)"
+    [[ -d "$mount_point" ]] || die "Failed to mount $dmg"
+    printf '%s\n' "$mount_point"
+}
+
+find_redist_lib() {
+    # Locate the redistributable/lib directory inside the mounted image.
+    local mnt="$1" d
+    d="$(find "$mnt" -type d -ipath '*redistributable*/lib' -maxdepth 6 2>/dev/null | head -n1)"
+    [[ -n "$d" ]] || die "Could not find redistributable/lib inside the disk image"
+    printf '%s\n' "$d"
+}
+
+# --- setup -----------------------------------------------------------------
+
+cmd_setup() {
+    require_macos
+    local dmg="${1:-}"
+
+    [[ -d "$CROSSOVER_APP" ]] || die "CrossOver is not installed at $CROSSOVER_APP"
+    [[ -d "$BOTTLE_DIR"   ]] || die "Bottle '$BOTTLE_NAME' not found. Install Steam through CrossOver first (Install button → Steam), log in once, then quit Steam."
+
+    if [[ -z "$dmg" ]]; then
+        dmg="$(find_dmg)" || die "No GPTK4 evaluation DMG found in ~/Downloads. Download it from developer.apple.com and re-run, or pass the path: ./gptk4 setup /path/to/Evaluation_Environment.dmg"
+    fi
+    [[ -f "$dmg" ]] || die "No such file: $dmg"
+
+    # 1. Duplicate CrossOver so the stock install stays clean.
+    if [[ -d "$GPTK4_APP" ]]; then
+        bold "Step 1: '$GPTK4_APP' already exists — reusing it."
+    else
+        bold "Step 1: Duplicating CrossOver → CrossOver GPTK4…"
+        cp -Rp "$CROSSOVER_APP" "$GPTK4_APP"
+        ok "Created $GPTK4_APP"
+    fi
+
+    # 2. Swap in the GPTK4 libraries from the evaluation environment.
+    bold "Step 2: Mounting $dmg…"
+    local mnt redist
+    mnt="$(mount_dmg "$dmg")"
+    trap 'hdiutil detach "$mnt" -quiet || true' EXIT
+    ok "Mounted at $mnt"
+
+    redist="$(find_redist_lib "$mnt")"
+    ok "Found GPTK4 libraries: $redist"
+
+    local target="$GPTK4_APP/$APPLE_GPTK_REL"
+    [[ -d "$target" ]] || die "Expected $target inside the CrossOver bundle — has the CrossOver layout changed?"
+
+    bold "Step 3: Installing GPTK4 libraries into the duplicated app…"
+    local src name
+    for src in "$redist"/*/; do
+        name="$(basename "$src")"
+        if [[ -d "$target/$name" && ! -d "$target/$name.backup" ]]; then
+            mv "$target/$name" "$target/$name.backup"
+            ok "Backed up original '$name' → '$name.backup'"
+        elif [[ -d "$target/$name" ]]; then
+            rm -rf "$target/$name"   # backup already exists from a previous run
+        fi
+        cp -Rp "$src" "$target/$name"
+        ok "Installed '$name'"
+    done
+
+    # 3. NVIDIA DLSS shim DLLs into the bottle's system32.
+    bold "Step 4: Installing NVIDIA DLSS shim DLLs into the Steam bottle…"
+    local nvngx_on_metal nvngx
+    nvngx_on_metal="$(find "$mnt" -type f -iname 'nvngx_on_metal*.dll' 2>/dev/null | head -n1 || true)"
+    nvngx="$(find "$mnt" -type f -iname 'nvngx.dll' 2>/dev/null | head -n1 || true)"
+    if [[ -n "$nvngx_on_metal" ]]; then
+        # The on-metal shim must end up named nvngx.dll so games load it.
+        rm -f "$SYSTEM32_DIR/nvngx.dll"
+        cp -p "$nvngx_on_metal" "$SYSTEM32_DIR/nvngx.dll"
+        ok "Installed $(basename "$nvngx_on_metal") as nvngx.dll"
+        if [[ -n "$nvngx" ]]; then
+            cp -p "$nvngx" "$SYSTEM32_DIR/$(basename "$nvngx")_gptk4_original" 2>/dev/null || true
+        fi
+    elif [[ -n "$nvngx" ]]; then
+        cp -p "$nvngx" "$SYSTEM32_DIR/nvngx.dll"
+        ok "Installed nvngx.dll"
+    else
+        warn "No nvngx*.dll found in the disk image — skipping DLSS shim (DLSS translation won't be available)"
+    fi
+
+    # 4. cxbottle.conf settings.
+    bold "Step 5: Configuring $CXBOTTLE_CONF…"
+    set_bottle_env "D3DM_MTL4" "$ENABLE_METAL4"
+    ok 'Enabled Metal 4 backend (D3DM_MTL4 = "1")'
+    if [[ -n "$MAX_FPS" ]]; then
+        set_bottle_env "D3DM_MAX_FPS" "$MAX_FPS"
+        ok "Frame-rate cap set to $MAX_FPS fps"
+    fi
+    set_bottle_env "MTL_HUD_ENABLED" "$METAL_HUD"
+    ok "Metal performance HUD enabled (look for 'D3D12 (Metal 4)' in the top-right of games)"
+
+    hdiutil detach "$mnt" -quiet || true
+    trap - EXIT
+
+    echo
+    bold "Setup complete."
+    echo "Remaining one-time steps in the CrossOver GPTK4 app (bottle '$BOTTLE_NAME'):"
+    echo "  • Make sure 'D3DMetal' and 'DLSS' are toggled ON in the bottle settings."
+    echo
+    echo "Then start playing with:  ./gptk4 launch"
+}
+
+# Append or update a quoted key in the [EnvironmentVariables] section of cxbottle.conf.
+set_bottle_env() {
+    local key="$1" value="$2"
+    [[ -f "$CXBOTTLE_CONF" ]] || die "cxbottle.conf not found at $CXBOTTLE_CONF"
+
+    if ! grep -q '^\[EnvironmentVariables\]' "$CXBOTTLE_CONF"; then
+        printf '\n[EnvironmentVariables]\n' >> "$CXBOTTLE_CONF"
+    fi
+
+    if grep -q "^\"$key\"" "$CXBOTTLE_CONF"; then
+        # Update existing value in place.
+        sed -i '' "s|^\"$key\" *=.*|\"$key\" = \"$value\"|" "$CXBOTTLE_CONF"
+    else
+        # Insert right after the [EnvironmentVariables] header.
+        sed -i '' "/^\[EnvironmentVariables\]/a\\
+\"$key\" = \"$value\"
+" "$CXBOTTLE_CONF"
+    fi
+}
+
+# --- launch ----------------------------------------------------------------
+
+cmd_launch() {
+    require_macos
+    [[ -d "$GPTK4_APP" ]] || die "CrossOver GPTK4 not set up yet — run: ./gptk4 setup"
+    [[ -d "$BOTTLE_DIR" ]] || die "Bottle '$BOTTLE_NAME' not found"
+
+    local wine="$GPTK4_APP/Contents/SharedSupport/CrossOver/bin/wine"
+    bold "Launching Steam in bottle '$BOTTLE_NAME' via CrossOver GPTK4…"
+
+    if [[ -x "$wine" ]]; then
+        exec env MTL_HUD_ENABLED="$METAL_HUD" \
+            "$wine" --bottle "$BOTTLE_NAME" --cx-app "$STEAM_EXE"
+    else
+        # Fall back to opening the app GUI (HUD is enabled via cxbottle.conf anyway).
+        open -a "$GPTK4_APP"
+    fi
+}
+
+# --- restore ---------------------------------------------------------------
+
+cmd_restore() {
+    require_macos
+    [[ -d "$GPTK4_APP" ]] || die "Nothing to restore — $GPTK4_APP does not exist"
+    local target="$GPTK4_APP/$APPLE_GPTK_REL" b name restored=0
+
+    bold "Restoring original CrossOver libraries…"
+    for b in "$target"/*.backup; do
+        [[ -d "$b" ]] || continue
+        name="$(basename "$b" .backup)"
+        rm -rf "$target/$name"
+        mv "$b" "$target/$name"
+        ok "Restored '$name'"
+        restored=1
+    done
+    [[ $restored -eq 1 ]] || warn "No .backup folders found — nothing restored"
+}
+
+# --- main ------------------------------------------------------------------
+
+usage() {
+    sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+    exit 1
+}
+
+case "${1:-}" in
+    check)   cmd_check ;;
+    setup)   shift; cmd_setup "${1:-}" ;;
+    launch)  cmd_launch ;;
+    restore) cmd_restore ;;
+    *)       usage ;;
+esac

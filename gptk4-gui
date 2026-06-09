@@ -106,9 +106,27 @@ $(tail -n 3 "$LOG" | strip_ansi)"
     fi
 }
 
+# Opens the download page for whichever requirement the user picks.
+do_downloads() {
+    local pick
+    pick=$(osascript <<'EOF'
+set opts to {"Game Porting Toolkit 4 — Evaluation Environment (Apple ID required)", "Apple Developer registration (free, needed for the download)", "CrossOver (free 14-day trial available)", "macOS installers (Mr. Macintosh blog)"}
+set c to choose from list opts with prompt "Which download do you need? Your browser will open the page." with title "GPTK4 Launcher"
+if c is false then return ""
+return item 1 of c
+EOF
+)
+    case "$pick" in
+        *"Game Porting"*)  open "https://developer.apple.com/download/all/?q=game%20porting%20toolkit" ;;
+        *"registration"*)  open "https://developer.apple.com/register/" ;;
+        *"CrossOver"*)     open "https://www.codeweavers.com/crossover/download" ;;
+        *"macOS"*)         open "https://mrmacintosh.com/" ;;
+    esac
+}
+
 main_menu() {
     osascript <<'EOF'
-set opts to {"🎮  Launch Steam (Metal 4)", "🛠  Set up GPTK4 (first time / update)", "✅  Check my setup", "↩️  Restore original CrossOver", "Quit"}
+set opts to {"🎮  Launch Steam (Metal 4)", "🛠  Set up GPTK4 (first time / update)", "📥  Get the downloads (GPTK4 / CrossOver / macOS)", "✅  Check my setup", "↩️  Restore original CrossOver", "Quit"}
 set c to choose from list opts with prompt "What would you like to do?" with title "GPTK4 Launcher" default items {item 1 of opts}
 if c is false then return "Quit"
 return item 1 of c
@@ -122,6 +140,7 @@ while true; do
     case "$(main_menu)" in
         *"Launch Steam"*)   do_launch; exit 0 ;;
         *"Set up"*)         do_setup ;;
+        *"downloads"*)      do_downloads ;;
         *"Check"*)          do_check ;;
         *"Restore"*)        do_restore ;;
         *)                  exit 0 ;;

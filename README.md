@@ -22,13 +22,16 @@ It automates the workflow from the setup video:
 
 These can't be automated because they need your logins/licenses:
 
-| Step | What to do |
-|---|---|
-| macOS 27.0 "Golden Gate" beta | Required for the Metal 4 translation layer |
-| Apple Developer account | Register your Apple ID for free, then download the **GPTK 4 Evaluation Environment** DMG into `~/Downloads` |
-| CrossOver (26.1+) | Install to `/Applications` and activate your license or trial |
-| Steam bottle | In CrossOver: **Install → Steam**, click through the installers, log in to Steam once, then quit |
-| Bottle toggles | In the Steam bottle's settings, turn **D3DMetal** and **DLSS** ON |
+| Step | What to do | Download |
+|---|---|---|
+| macOS 27.0 "Golden Gate" beta | Required for the Metal 4 translation layer | [Apple beta downloads](https://developer.apple.com/download/) · [Full installers (Mr. Macintosh)](https://mrmacintosh.com/) |
+| Apple Developer account | Register your Apple ID for free — needed to download GPTK4 | [developer.apple.com/register](https://developer.apple.com/register/) |
+| GPTK 4 Evaluation Environment | Log in with your registered Apple ID, search "Game Porting Toolkit", and download the **Evaluation Environment** DMG into `~/Downloads` | [developer.apple.com/download/all](https://developer.apple.com/download/all/?q=game%20porting%20toolkit) |
+| CrossOver (26.1+) | Install to `/Applications` and activate your license or the free 14-day trial | [codeweavers.com/crossover/download](https://www.codeweavers.com/crossover/download) |
+| Steam bottle | In CrossOver: **Install → Steam**, click through the installers, log in to Steam once, then quit | — |
+| Bottle toggles | In the Steam bottle's settings, turn **D3DMetal** and **DLSS** ON | — |
+
+The GUI also has a **📥 Get the downloads** menu option that opens these pages for you.
 
 ## Easiest way: the GUI
 

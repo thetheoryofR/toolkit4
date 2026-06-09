@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+#
+# gptk4-gui — native macOS dialog interface around the 'gptk4' CLI.
+#
+# Shows a simple menu (Launch / Set up / Check / Restore) using standard
+# macOS dialogs, so no Terminal knowledge is needed. All output is kept
+# in ~/Library/Logs/gptk4-launcher.log for troubleshooting.
+#
+set -uo pipefail
+cd "$(dirname "$0")"
+
+GPTK4="./gptk4"
+TITLE="GPTK4 Launcher"
+LOG="$HOME/Library/Logs/gptk4-launcher.log"
+GPTK4_APP="/Applications/CrossOver GPTK4.app"
+
+[[ -x "$GPTK4" ]] || { osascript -e 'display alert "GPTK4 Launcher" message "The gptk4 script is missing. Keep gptk4-gui in the same folder as gptk4." as critical'; exit 1; }
+
+strip_ansi() { sed $'s/\033\\[[0-9;]*m//g'; }
+
+# Simple OK dialog. Message passed via env to avoid quoting problems.
+info() {
+    MSG="$1" TITLE="$TITLE" osascript -e \
+        'display dialog (system attribute "MSG") with title (system attribute "TITLE") buttons {"OK"} default button 1 with icon note' >/dev/null
+}
+
+# Error dialog with a button to open the log file.
+show_error() {
+    local choice
+    choice=$(MSG="$1" TITLE="$TITLE" osascript -e \
+        'button returned of (display dialog (system attribute "MSG") with title (system attribute "TITLE") buttons {"View Log", "OK"} default button "OK" with icon stop)')
+    [[ "$choice" == "View Log" ]] && open "$LOG"
+}
+
+notify() {
+    MSG="$1" TITLE="$TITLE" osascript -e \
+        'display notification (system attribute "MSG") with title (system attribute "TITLE")'
+}
+
+# Returns the path to the GPTK4 evaluation DMG, asking the user if needed.
+resolve_dmg() {
+    local dmg
+    dmg="$(ls -t "$HOME"/Downloads/*[Ee]valuation*.dmg \
+                "$HOME"/Downloads/*[Gg]ame*[Pp]orting*.dmg 2>/dev/null | head -n1 || true)"
+    if [[ -n "$dmg" ]]; then
+        local use
+        use=$(MSG="Found this disk image in your Downloads folder:
+
+$(basename "$dmg")
+
+Use it for the setup?" TITLE="$TITLE" osascript -e \
+            'button returned of (display dialog (system attribute "MSG") with title (system attribute "TITLE") buttons {"Choose Another…", "Use This One"} default button "Use This One" with icon note)') || return 1
+        [[ "$use" == "Use This One" ]] && { printf '%s\n' "$dmg"; return 0; }
+    fi
+    osascript -e 'POSIX path of (choose file with prompt "Select the Game Porting Toolkit 4 Evaluation Environment disk image (.dmg):" of type {"com.apple.disk-image"})' 2>/dev/null
+}
+
+do_setup() {
+    local dmg
+    dmg="$(resolve_dmg)" || return 0   # user cancelled
+
+    notify "Setting up GPTK4… this can take a few minutes."
+    if "$GPTK4" setup "$dmg" >>"$LOG" 2>&1; then
+        info "Setup complete! 🎉
+
+One last thing to check inside the 'CrossOver GPTK4' app:
+open your Steam bottle's settings and make sure
+'D3DMetal' and 'DLSS' are turned ON.
+
+After that, just use 'Launch Steam' from this menu."
+    else
+        show_error "Setup failed.
+
+$(tail -n 4 "$LOG" | strip_ansi)
+
+Make sure CrossOver is installed, Steam was installed once through CrossOver, and the GPTK4 disk image is downloaded."
+    fi
+}
+
+do_launch() {
+    if [[ ! -d "$GPTK4_APP" ]]; then
+        info "GPTK4 isn't set up yet — choose 'Set up GPTK4' first."
+        return 0
+    fi
+    notify "Launching Steam through CrossOver GPTK4…"
+    nohup "$GPTK4" launch >>"$LOG" 2>&1 &
+}
+
+do_check() {
+    local out
+    out="$("$GPTK4" check 2>&1 | strip_ansi)"
+    info "$out"
+}
+
+do_restore() {
+    local sure
+    sure=$(MSG="This puts the original CrossOver libraries back inside 'CrossOver GPTK4.app', undoing the GPTK4 setup. Continue?" TITLE="$TITLE" osascript -e \
+        'button returned of (display dialog (system attribute "MSG") with title (system attribute "TITLE") buttons {"Cancel", "Restore"} default button "Cancel" with icon caution)') || return 0
+    [[ "$sure" == "Restore" ]] || return 0
+    if "$GPTK4" restore >>"$LOG" 2>&1; then
+        info "Original CrossOver libraries restored."
+    else
+        show_error "Restore failed.
+
+$(tail -n 3 "$LOG" | strip_ansi)"
+    fi
+}
+
+main_menu() {
+    osascript <<'EOF'
+set opts to {"🎮  Launch Steam (Metal 4)", "🛠  Set up GPTK4 (first time / update)", "✅  Check my setup", "↩️  Restore original CrossOver", "Quit"}
+set c to choose from list opts with prompt "What would you like to do?" with title "GPTK4 Launcher" default items {item 1 of opts}
+if c is false then return "Quit"
+return item 1 of c
+EOF
+}
+
+mkdir -p "$(dirname "$LOG")"
+echo "=== gptk4-gui session $(date) ===" >>"$LOG"
+
+while true; do
+    case "$(main_menu)" in
+        *"Launch Steam"*)   do_launch; exit 0 ;;
+        *"Set up"*)         do_setup ;;
+        *"Check"*)          do_check ;;
+        *"Restore"*)        do_restore ;;
+        *)                  exit 0 ;;
+    esac
+done

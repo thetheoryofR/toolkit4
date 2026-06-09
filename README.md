@@ -30,7 +30,28 @@ These can't be automated because they need your logins/licenses:
 | Steam bottle | In CrossOver: **Install → Steam**, click through the installers, log in to Steam once, then quit |
 | Bottle toggles | In the Steam bottle's settings, turn **D3DMetal** and **DLSS** ON |
 
-## Usage
+## Easiest way: the GUI
+
+No Terminal needed:
+
+1. Double-click **`Create App.command`** once. This builds **GPTK4 Launcher.app**
+   in your Applications folder.
+2. Open **GPTK4 Launcher** from Launchpad or Spotlight. You'll get a simple menu:
+   - **🎮 Launch Steam (Metal 4)** — starts Steam through the patched CrossOver
+   - **🛠 Set up GPTK4** — does the whole setup with normal Mac dialogs
+     (it finds the downloaded disk image automatically, or lets you pick it)
+   - **✅ Check my setup** — tells you what's missing, in plain language
+   - **↩️ Restore original CrossOver** — undoes the setup
+
+If something goes wrong, the error dialog has a **View Log** button
+(the log lives at `~/Library/Logs/gptk4-launcher.log`).
+
+> First time macOS may block the `.command` file: right-click it → **Open** → **Open**.
+
+You can also skip building the app and just double-click
+**`GPTK4 Launcher.command`** — it opens the same menu.
+
+## Command-line usage
 
 ```sh
 ./gptk4 check                  # verify everything is in place
@@ -39,12 +60,6 @@ These can't be automated because they need your logins/licenses:
 ./gptk4 launch                 # start Steam through CrossOver GPTK4
 ./gptk4 restore                # put the original CrossOver libraries back
 ```
-
-Or just double-click **`GPTK4 Launcher.command`** in Finder — it runs setup on
-first use and launches Steam after that.
-
-> If macOS blocks the `.command` file the first time, right-click → Open, or run
-> `chmod +x gptk4 "GPTK4 Launcher.command"` in Terminal.
 
 ## Configuration
 

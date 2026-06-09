@@ -21,20 +21,20 @@ strip_ansi() { sed $'s/\033\\[[0-9;]*m//g'; }
 # Simple OK dialog. Message passed via env to avoid quoting problems.
 info() {
     MSG="$1" TITLE="$TITLE" osascript -e \
-        'display dialog (system attribute "MSG") with title (system attribute "TITLE") buttons {"OK"} default button 1 with icon note' >/dev/null
+        'display dialog (do shell script "printf %s \"$MSG\"") with title (system attribute "TITLE") buttons {"OK"} default button 1 with icon note' >/dev/null
 }
 
 # Error dialog with a button to open the log file.
 show_error() {
     local choice
     choice=$(MSG="$1" TITLE="$TITLE" osascript -e \
-        'button returned of (display dialog (system attribute "MSG") with title (system attribute "TITLE") buttons {"View Log", "OK"} default button "OK" with icon stop)')
+        'button returned of (display dialog (do shell script "printf %s \"$MSG\"") with title (system attribute "TITLE") buttons {"View Log", "OK"} default button "OK" with icon stop)')
     [[ "$choice" == "View Log" ]] && open "$LOG"
 }
 
 notify() {
     MSG="$1" TITLE="$TITLE" osascript -e \
-        'display notification (system attribute "MSG") with title (system attribute "TITLE")'
+        'display notification (do shell script "printf %s \"$MSG\"") with title (system attribute "TITLE")'
 }
 
 # Returns the path to the GPTK4 evaluation DMG, asking the user if needed.
@@ -49,7 +49,7 @@ resolve_dmg() {
 $(basename "$dmg")
 
 Use it for the setup?" TITLE="$TITLE" osascript -e \
-            'button returned of (display dialog (system attribute "MSG") with title (system attribute "TITLE") buttons {"Choose Another…", "Use This One"} default button "Use This One" with icon note)') || return 1
+            'button returned of (display dialog (do shell script "printf %s \"$MSG\"") with title (system attribute "TITLE") buttons {"Choose Another…", "Use This One"} default button "Use This One" with icon note)') || return 1
         [[ "$use" == "Use This One" ]] && { printf '%s\n' "$dmg"; return 0; }
     fi
     osascript -e 'POSIX path of (choose file with prompt "Select the Game Porting Toolkit 4 Evaluation Environment disk image (.dmg):" of type {"com.apple.disk-image"})' 2>/dev/null
@@ -95,7 +95,7 @@ do_check() {
 do_restore() {
     local sure
     sure=$(MSG="This puts the original CrossOver libraries back inside 'CrossOver GPTK4.app', undoing the GPTK4 setup. Continue?" TITLE="$TITLE" osascript -e \
-        'button returned of (display dialog (system attribute "MSG") with title (system attribute "TITLE") buttons {"Cancel", "Restore"} default button "Cancel" with icon caution)') || return 0
+        'button returned of (display dialog (do shell script "printf %s \"$MSG\"") with title (system attribute "TITLE") buttons {"Cancel", "Restore"} default button "Cancel" with icon caution)') || return 0
     [[ "$sure" == "Restore" ]] || return 0
     if "$GPTK4" restore >>"$LOG" 2>&1; then
         info "Original CrossOver libraries restored."
@@ -110,9 +110,9 @@ $(tail -n 3 "$LOG" | strip_ansi)"
 do_downloads() {
     local pick
     pick=$(osascript <<'EOF'
-set opts to {"Game Porting Toolkit 4 — Evaluation Environment (Apple ID required)", "Apple Developer registration (free, needed for the download)", "CrossOver (free 14-day trial available)", "macOS installers (Mr. Macintosh blog)"}
-set c to choose from list opts with prompt "Which download do you need? Your browser will open the page." with title "GPTK4 Launcher"
-if c is false then return ""
+set opts to {"Game Porting Toolkit 4 - Evaluation Environment (Apple ID required)", "Apple Developer registration (free, needed for the download)", "CrossOver (free 14-day trial available)", "macOS installers (Mr. Macintosh blog)"}
+set c to choose from list opts with prompt "Which download do you need? Select one and click OK - your browser will open the page." with title "GPTK4 Launcher" default items {item 1 of opts}
+if c is false or c is {} then return ""
 return item 1 of c
 EOF
 )
@@ -121,6 +121,8 @@ EOF
         *"registration"*)  open "https://developer.apple.com/register/" ;;
         *"CrossOver"*)     open "https://www.codeweavers.com/crossover/download" ;;
         *"macOS"*)         open "https://mrmacintosh.com/" ;;
+        "")                ;;  # cancelled
+        *)                 show_error "Couldn't open that download page. Picked: $pick" ;;
     esac
 }
 

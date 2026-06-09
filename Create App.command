@@ -5,6 +5,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Files downloaded from GitHub lose their executable bit — restore it.
+chmod +x gptk4 gptk4-gui 2>/dev/null || true
+
 APP="/Applications/GPTK4 Launcher.app"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

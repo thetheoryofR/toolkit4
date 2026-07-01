@@ -48,6 +48,10 @@ BOTTLE_DIR="$HOME/Library/Application Support/CrossOver/Bottles/$BOTTLE_NAME"
 SYSTEM32_DIR="$BOTTLE_DIR/drive_c/windows/system32"
 CXBOTTLE_CONF="$BOTTLE_DIR/cxbottle.conf"
 
+# Mount point of the evaluation-environment DMG; set during setup. The EXIT
+# trap in cmd_setup detaches this on abort, so it is a global, not a local.
+MOUNT_POINT=""
+
 # ---------------------------------------------------------------------------
 
 bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -107,10 +111,13 @@ cmd_check() {
 # --- helpers ---------------------------------------------------------------
 
 find_dmg() {
-    # Newest dmg in ~/Downloads that looks like the GPTK / evaluation environment image.
+    # Locate the GPTK4 disk image in ~/Downloads. Prefer the "Evaluation
+    # Environment" image (it contains redist/lib); fall back to the
+    # top-level "Game Porting Toolkit" image only if that's all that's present.
     local f
-    f="$(ls -t "$HOME"/Downloads/*[Ee]valuation*.dmg \
-              "$HOME"/Downloads/*[Gg]ame*[Pp]orting*.dmg 2>/dev/null | head -n1 || true)"
+    f="$(ls -t "$HOME"/Downloads/*[Ee]valuation*[Ee]nvironment*.dmg \
+              "$HOME"/Downloads/*[Ee]valuation*.dmg 2>/dev/null | head -n1 || true)"
+    [[ -n "$f" ]] || f="$(ls -t "$HOME"/Downloads/*[Gg]ame*[Pp]orting*.dmg 2>/dev/null | head -n1 || true)"
     [[ -n "$f" ]] || return 1
     printf '%s\n' "$f"
 }
@@ -125,10 +132,13 @@ mount_dmg() {
 }
 
 find_redist_lib() {
-    # Locate the redistributable/lib directory inside the mounted image.
+    # Locate the redist/lib directory inside the mounted image. GPTK4 beta 1
+    # ships it as <volume>/redist/lib; older images used redistributable/lib.
+    # 'redist' matches both. `|| true` keeps the find|head pipeline from
+    # aborting under `set -e -o pipefail` when head closes the pipe (SIGPIPE).
     local mnt="$1" d
-    d="$(find "$mnt" -type d -ipath '*redistributable*/lib' -maxdepth 6 2>/dev/null | head -n1)"
-    [[ -n "$d" ]] || die "Could not find redistributable/lib inside the disk image"
+    d="$(find "$mnt" -type d -ipath '*redist*/lib' -maxdepth 6 2>/dev/null | head -n1 || true)"
+    [[ -n "$d" ]] || die "Could not find redist/lib inside the disk image"
     printf '%s\n' "$d"
 }
 
@@ -156,13 +166,16 @@ cmd_setup() {
     fi
 
     # 2. Swap in the GPTK4 libraries from the evaluation environment.
-    bold "Step 2: Mounting $dmg…"
-    local mnt redist
-    mnt="$(mount_dmg "$dmg")"
-    trap 'hdiutil detach "$mnt" -quiet || true' EXIT
-    ok "Mounted at $mnt"
+    bold "Step 2: Mounting ${dmg}…"
+    local redist
+    MOUNT_POINT="$(mount_dmg "$dmg")"
+    # Detach on any exit — including a set -e abort. MOUNT_POINT is a global so
+    # the trap still sees it after cmd_setup's frame unwinds; the :- guard
+    # covers the (unreachable here) case where the trap fires before the mount.
+    trap 'hdiutil detach "${MOUNT_POINT:-}" -quiet 2>/dev/null || true' EXIT
+    ok "Mounted at $MOUNT_POINT"
 
-    redist="$(find_redist_lib "$mnt")"
+    redist="$(find_redist_lib "$MOUNT_POINT")"
     ok "Found GPTK4 libraries: $redist"
 
     local target="$GPTK4_APP/$APPLE_GPTK_REL"
@@ -185,8 +198,9 @@ cmd_setup() {
     # 3. NVIDIA DLSS shim DLLs into the bottle's system32.
     bold "Step 4: Installing NVIDIA DLSS shim DLLs into the Steam bottle…"
     local nvngx_on_metal nvngx
-    nvngx_on_metal="$(find "$mnt" -type f -iname 'nvngx_on_metal*.dll' 2>/dev/null | head -n1 || true)"
-    nvngx="$(find "$mnt" -type f -iname 'nvngx.dll' 2>/dev/null | head -n1 || true)"
+    # The DLSS shim is nvngx_on_metal.dll (older) or nvngx-on-metalfx.dll (beta 1).
+    nvngx_on_metal="$(find "$MOUNT_POINT" -type f -iname 'nvngx*metal*.dll' 2>/dev/null | head -n1 || true)"
+    nvngx="$(find "$MOUNT_POINT" -type f -iname 'nvngx.dll' 2>/dev/null | head -n1 || true)"
     if [[ -n "$nvngx_on_metal" ]]; then
         # The on-metal shim must end up named nvngx.dll so games load it.
         rm -f "$SYSTEM32_DIR/nvngx.dll"
@@ -203,7 +217,7 @@ cmd_setup() {
     fi
 
     # 4. cxbottle.conf settings.
-    bold "Step 5: Configuring $CXBOTTLE_CONF…"
+    bold "Step 5: Configuring ${CXBOTTLE_CONF}…"
     set_bottle_env "D3DM_MTL4" "$ENABLE_METAL4"
     ok 'Enabled Metal 4 backend (D3DM_MTL4 = "1")'
     if [[ -n "$MAX_FPS" ]]; then
@@ -213,7 +227,7 @@ cmd_setup() {
     set_bottle_env "MTL_HUD_ENABLED" "$METAL_HUD"
     ok "Metal performance HUD enabled (look for 'D3D12 (Metal 4)' in the top-right of games)"
 
-    hdiutil detach "$mnt" -quiet || true
+    hdiutil detach "$MOUNT_POINT" -quiet || true
     trap - EXIT
 
     echo
